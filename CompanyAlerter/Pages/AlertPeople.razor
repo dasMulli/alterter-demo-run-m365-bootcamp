@@ -1,0 +1,94 @@
+@page "/alert"
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.WebAssembly.Authentication
+@using System.Net.Http.Headers
+@attribute [Authorize]
+@inject IAccessTokenProvider TokenProvider
+@inject IJSRuntime JsRuntime
+@inject HttpClient HttpClient
+
+<mgt-people-picker type="any" @ref="peoplePickerReference"></mgt-people-picker>
+
+<textarea @bind="message" placeholder="Alert message" class="form-control mt-4"></textarea>
+
+<button class="btn btn-primary mt-4" @onclick="SendAlert" disabled="@string.IsNullOrWhiteSpace(message)">Send Alert</button>
+
+@if (statusText is not null)
+{
+    <p class="alert-info mt-4">@statusText</p>
+}
+
+@code {
+    private string message;
+
+    private string statusText;
+
+    private ElementReference peoplePickerReference;
+
+    private async Task SendAlert()
+    {
+        var selectedPeople = await JsRuntime.InvokeAsync<string[]>("getSelectedPeopleIds", peoplePickerReference);
+
+        if (selectedPeople is null || selectedPeople.Length == 0)
+        {
+            return;
+        }
+
+        var accessTokenResult = await TokenProvider.RequestAccessToken(new AccessTokenRequestOptions
+        {
+            Scopes = new []{ "api://alerter-demo/Alert.Send" }
+        });
+
+        if (!accessTokenResult.TryGetToken(out var accessToken))
+        {
+            return;
+        }
+
+        var sendAlertRequest = new SendAlertRequest
+        {
+            Message = message,
+            RecipientIds = selectedPeople
+        };
+
+        var jsonContent = JsonContent.Create(sendAlertRequest);
+        var requestMessage = new HttpRequestMessage(HttpMethod.Post, "/api/sendAlert");
+        requestMessage.Content = jsonContent;
+
+        var authenticationHeaderValue = new AuthenticationHeaderValue("Bearer", accessToken.Value);
+        requestMessage.Headers.Authorization = authenticationHeaderValue;
+        requestMessage.Headers.Add("X-Authorization", authenticationHeaderValue.ToString());
+
+        var result = await HttpClient.SendAsync(requestMessage);
+
+        if (result.IsSuccessStatusCode)
+        {
+            statusText = "Message sent";
+        }
+        else
+        {
+            statusText = "Sending message failed";
+        }
+    }
+
+    protected override Task OnInitializedAsync()
+    {
+        staticAcquireMgtAccessToken = async (scope) =>
+        {
+            var tokenResult = await TokenProvider.RequestAccessToken(new AccessTokenRequestOptions
+            {
+                Scopes = scope
+            });
+            return tokenResult.TryGetToken(out var token) ? token.Value : null;
+        };
+
+        JsRuntime.InvokeVoidAsync("setMgtProviderStateSignedIn");
+
+        return base.OnInitializedAsync();
+    }
+
+    private static Func<string[], Task<string>> staticAcquireMgtAccessToken;
+
+    [JSInvokable(nameof(AcquireMgtAccessToken))]
+    public static Task<string> AcquireMgtAccessToken(string[] scopes)
+        => staticAcquireMgtAccessToken?.Invoke(scopes) ?? Task.FromResult((string) null);
+}
